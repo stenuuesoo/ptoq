@@ -6,10 +6,7 @@ class Logger:
     def __init__(self, base_path):
         self.base_path = base_path
 
-    def log_trade_decision(self, symbol, trade_decision, indicators):
-        # Generating unique trade_id
-        trade_id = f"{symbol.lower()}_{str(uuid.uuid4())[:8]}"
-
+    def log_trade_decision(self, symbol, trade_id, trade_decision, indicators):
         # Extracting decision details for filename
         time_frame = list(trade_decision.keys())[0]
         decision_data = trade_decision[time_frame]
