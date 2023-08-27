@@ -1,7 +1,5 @@
 import uuid
-import json
 import time
-from datetime import datetime
 from tradingview_ta import TA_Handler, Interval
 
 
@@ -10,6 +8,10 @@ class Pairs:
         self.symbol = symbol
         self.screener = screener
         self.exchange = exchange
+        # If intervals is not passed, use a default value
+        if intervals is None:
+            intervals = {"5m": "5m"}  # Replace "5m" with the appropriate interval constant if needed
+
         self.intervals = intervals
 
         self.handlers = {}
@@ -45,21 +47,6 @@ class Retrieve:
 
 
 class Technical_Analysis:
-    RSI_MIN = 30
-    RSI_MAX = 70
-    MACD_SIGNAL_DIFF_BUY = 0.01
-    MACD_SIGNAL_DIFF_SELL = -0.01
-    STOCHASTIC_OSCILLATOR_MIN = 20
-    STOCHASTIC_OSCILLATOR_MAX = 80
-    UO_MIN = 30
-    UO_MAX = 70
-    ADX_MIN = 20
-    ADX_MAX = 25
-    CCI20_MIN = -100
-    CCI20_MAX = 100
-    RECOMMEND_BUY_THRESHOLD = 0.7
-    RECOMMEND_SELL_THRESHOLD = 0.3
-
     INDICATOR_WEIGHTS = {
         "MA": 2,
         "RSI": 1,
@@ -73,6 +60,14 @@ class Technical_Analysis:
         "PIVOT": 1,
         "PSAR": 1
     }
+
+    RSI_LIMITS = {'min': 30, 'max': 70}
+    MACD_SIGNAL_DIFF = {'buy': 0.01, 'sell': -0.01}
+    STOCHASTIC_OSCILLATOR_LIMITS = {'min': 20, 'max': 80}
+    UO_LIMITS = {'min': 30, 'max': 70}
+    ADX_LIMITS = {'min': 20, 'max': 25}
+    CCI20_LIMITS = {'min': -100, 'max': 100}
+    RECOMMEND_THRESHOLDS = {'buy': 0.7, 'sell': 0.3}
 
     def __init__(self, data):
         self.data = data
@@ -116,22 +111,60 @@ class Technical_Analysis:
     def rsi_logic(self, rsi_value, direction_scores, reasoning):
         if rsi_value is None:
             return
-        if rsi_value < self.RSI_MIN:
-            reasoning.append(f"RSI is below {self.RSI_MIN} - potential BUY")
+        if rsi_value < self.RSI_LIMITS['min']:
+            reasoning.append(f"RSI is below {self.RSI_LIMITS['min']} - potential BUY")
             direction_scores["BUY"] += self.INDICATOR_WEIGHTS["RSI"]
-        elif rsi_value > self.RSI_MAX:
-            reasoning.append(f"RSI is above {self.RSI_MAX} - potential SELL")
+        elif rsi_value > self.RSI_LIMITS['max']:
+            reasoning.append(f"RSI is above {self.RSI_LIMITS['max']} - potential SELL")
             direction_scores["SELL"] += self.INDICATOR_WEIGHTS["RSI"]
 
     def macd_logic(self, macd_value, direction_scores, reasoning):
         if macd_value is None:
             return
-        if macd_value > self.MACD_SIGNAL_DIFF_BUY:
+        if macd_value > self.MACD_SIGNAL_DIFF['buy']:
             reasoning.append("MACD is above the signal line - potential BUY")
             direction_scores["BUY"] += self.INDICATOR_WEIGHTS["MACD"]
-        elif macd_value < self.MACD_SIGNAL_DIFF_SELL:
+        elif macd_value < self.MACD_SIGNAL_DIFF['sell']:
             reasoning.append("MACD is below the signal line - potential SELL")
             direction_scores["SELL"] += self.INDICATOR_WEIGHTS["MACD"]
+
+    def oscillator_logic(self, osc_value, direction_scores, reasoning):
+        if osc_value is None:
+            return
+        if osc_value < self.STOCHASTIC_OSCILLATOR_LIMITS['min']:
+            reasoning.append("Stochastic Oscillator is in oversold region - potential BUY")
+            direction_scores["BUY"] += self.INDICATOR_WEIGHTS["Stoch.RSI.K"]
+        elif osc_value > self.STOCHASTIC_OSCILLATOR_LIMITS['max']:
+            reasoning.append("Stochastic Oscillator is in overbought region - potential SELL")
+            direction_scores["SELL"] += self.INDICATOR_WEIGHTS["Stoch.RSI.K"]
+
+    def adx_logic(self, adx_value, direction_scores, reasoning):
+        if adx_value is None:
+            return
+        if adx_value > self.ADX_LIMITS['max']:
+            reasoning.append("Strong trend strength (ADX)")
+        elif adx_value < self.ADX_LIMITS['min']:
+            reasoning.append("Weak trend strength (ADX)")
+
+    def uo_logic(self, uo_value, direction_scores, reasoning):
+        if uo_value is None:
+            return
+        if uo_value > self.UO_LIMITS['max']:
+            reasoning.append("UO indicates overbought conditions - potential SELL")
+            direction_scores["SELL"] += self.INDICATOR_WEIGHTS["UO"]
+        elif uo_value < self.UO_LIMITS['min']:
+            reasoning.append("UO indicates oversold conditions - potential BUY")
+            direction_scores["BUY"] += self.INDICATOR_WEIGHTS["UO"]
+
+    def cci20_logic(self, cci20_value, direction_scores, reasoning):
+        if cci20_value is None:
+            return
+        if cci20_value > self.CCI20_LIMITS['max']:
+            reasoning.append("CCI indicates overbought conditions - potential SELL")
+            direction_scores["SELL"] += self.INDICATOR_WEIGHTS["CCI20"]
+        elif cci20_value < self.CCI20_LIMITS['min']:
+            reasoning.append("CCI indicates oversold conditions - potential BUY")
+            direction_scores["BUY"] += self.INDICATOR_WEIGHTS["CCI20"]
 
     def bollinger_logic(self, bb_upper_value, bb_lower_value, close_value, direction_scores, reasoning):
         if None in [bb_upper_value, bb_lower_value, close_value]:
@@ -143,53 +176,13 @@ class Technical_Analysis:
             reasoning.append("Price is below Bollinger Band lower limit - potential BUY")
             direction_scores["BUY"] += self.INDICATOR_WEIGHTS["BB"]
 
-    def oscillator_logic(self, osc_value, direction_scores, reasoning):
-        if osc_value is None:
-            return
-        if osc_value < self.STOCHASTIC_OSCILLATOR_MIN:
-            reasoning.append("Stochastic Oscillator is in oversold region - potential BUY")
-            direction_scores["BUY"] += self.INDICATOR_WEIGHTS["Stoch.RSI.K"]
-        elif osc_value > self.STOCHASTIC_OSCILLATOR_MAX:
-            reasoning.append("Stochastic Oscillator is in overbought region - potential SELL")
-            direction_scores["SELL"] += self.INDICATOR_WEIGHTS["Stoch.RSI.K"]
-
-    def adx_logic(self, adx_value, direction_scores, reasoning):
-        if adx_value is None:
-            # reasoning.append("ADX value is missing (None)")
-            return
-        if adx_value > self.ADX_MAX:
-            reasoning.append("Strong trend strength (ADX)")
-        elif adx_value < self.ADX_MIN:
-            reasoning.append("Weak trend strength (ADX)")
-
-    def uo_logic(self, uo_value, direction_scores, reasoning):
-        if uo_value is None:
-            # reasoning.append("UO value is missing (None)")
-            return
-        if uo_value > self.UO_MAX:
-            reasoning.append("UO indicates overbought conditions - potential SELL")
-            direction_scores["SELL"] += self.INDICATOR_WEIGHTS["UO"]
-        elif uo_value < self.UO_MIN:
-            reasoning.append("UO indicates oversold conditions - potential BUY")
-            direction_scores["BUY"] += self.INDICATOR_WEIGHTS["UO"]
-
-    def cci20_logic(self, cci20_value, direction_scores, reasoning):
-        if cci20_value is None:
-            return
-        if cci20_value > self.CCI20_MAX:
-            reasoning.append("CCI indicates overbought conditions - potential SELL")
-            direction_scores["SELL"] += self.INDICATOR_WEIGHTS["CCI20"]
-        elif cci20_value < self.CCI20_MIN:
-            reasoning.append("CCI indicates oversold conditions - potential BUY")
-            direction_scores["BUY"] += self.INDICATOR_WEIGHTS["CCI20"]
-
     def recommend_logic(self, recommend_all_value, direction_scores, reasoning):
         if recommend_all_value is None:
             return
-        if recommend_all_value > self.RECOMMEND_BUY_THRESHOLD:
+        if recommend_all_value > self.RECOMMEND_THRESHOLDS['buy']:
             direction_scores['BUY'] += self.INDICATOR_WEIGHTS["RECO"]
             reasoning.append("Recommendation score indicates potential BUY")
-        elif recommend_all_value < self.RECOMMEND_SELL_THRESHOLD:
+        elif recommend_all_value < self.RECOMMEND_THRESHOLDS['sell']:
             direction_scores['SELL'] += self.INDICATOR_WEIGHTS["RECO"]
             reasoning.append("Recommendation score indicates potential SELL")
         else:
@@ -242,39 +235,37 @@ class Technical_Analysis:
         return {k: decisions[k] for k in self.data.keys()}
 
 
-class Logger:
-    def __init__(self, base_path):
-        self.base_path = base_path
+class Trade:
+    def __init__(self, pair, entry_price, stop_loss, target_price, time_frame, trade_direction):
+        self.pair = pair
+        self.entry_price = entry_price
+        self.stop_loss = stop_loss
+        self.target_price = target_price
+        self.time_frame = time_frame
+        self.trade_direction = trade_direction
 
-    def prepare_log_data(self, symbol, trade_id, trade_decision, indicators):
-        log_data = {
-            'symbol': symbol,
-            'run_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'trade_id': trade_id,
-            'decisions': {},
-            'indicators': indicators
-        }
 
-        for time_frame, decision in trade_decision.items():
-            decision_data = trade_decision[time_frame]
-            confidence_score = decision_data['confidence_score']
-            strategies = decision_data['reasoning']
+def collect_potential_trades(symbols, screener, exchange, custom_intervals):
+    potential_trades = []
 
-            log_data['decisions'][time_frame] = {
-                'confidence_score': confidence_score,
-                'strategies': strategies,
-            }
+    for symbol in symbols:
+        trade_id = str(uuid.uuid4())[:8]
+        pairs_instance = Pairs(symbol, screener, exchange, intervals=custom_intervals)
 
-        return log_data
+        all_data = Retrieve(pairs_instance).data
+        analysis_component = Technical_Analysis(all_data)
+        trade_decision = analysis_component.decide_trade_action()
 
-    def log_symbol_data(self, symbol, symbol_data):
-        current_time = datetime.now().strftime('%Y_%m_%d_%H_%M')
-        filename = f"{symbol.lower()}_{current_time}.txt"
-        log_file_path = f"{self.base_path}/{filename}"
+        for time_frame, decision_data in trade_decision.items():
+            potential_trades.append({
+                'symbol': symbol,
+                'time_frame': time_frame,
+                'reasoning': decision_data['reasoning'],
+                'confidence_score': decision_data['confidence_score'],
+                'indicators': all_data[time_frame]['indicators']
+            })
 
-        with open(log_file_path, 'w') as file:
-            file.write(json.dumps(symbol_data, indent=4))
-            file.write("\n\n")
+    return potential_trades
 
 
 class Trader:
@@ -284,12 +275,9 @@ class Trader:
         self.open_trades = []  # List to hold the currently open trades
         self.max_open_trades = 2  # Maximum allowed open trades
         self.pips_target = 20  # Pips challenge target
-
         self.display_best_candidate()
-        self.execute_trade()
 
     def find_best_candidate(self):
-        # This function finds the best trading candidate based on confidence scores
         max_score = 0
         best_candidate = None
 
@@ -315,6 +303,7 @@ class Trader:
                     'symbol': symbol,
                     'time_frame': time_frame,
                     'score': score,
+                    'confidence_score': trade['confidence_score'],
                     'reasoning': trade['reasoning'],
                     'indicators': trade['indicators']
                 }
@@ -326,20 +315,27 @@ class Trader:
             print(
                 f"\nBest trading opportunity is for {self.best_candidate['symbol']} ({self.best_candidate['time_frame']}) with a score of {self.best_candidate['score']}. Reasoning: {', '.join(self.best_candidate['reasoning'])}")
 
+    def find_sorted_candidates(self):
+        return sorted(self.potential_trades, key=lambda x: x['confidence_score'], reverse=True)
+
+    def find_new_candidates(self, screener, exchange, custom_intervals):
+        if len(self.open_trades) < self.max_open_trades:
+            print("\n<2 trades. Finding new trade candidates...")
+            self.potential_trades = collect_potential_trades(symbols, screener, exchange, custom_intervals)
+            temp_open_trades = self.open_trades[:]
+            self.potential_trades = [trade for trade in self.potential_trades if
+                                     not self.trade_open_for_pair(trade['symbol'])]
+            self.best_candidate = self.find_best_candidate()
+            self.open_trades = temp_open_trades[:]
+
+            if self.best_candidate:
+                print(f"New best candidate found: {self.best_candidate['symbol']}")
+            else:
+                print("No suitable candidate found.")
+
     @property
     def current_market_price(self):
-        # For simplicity, we'll take the close price from the 15m timeframe as the current market price.
-
         return self.best_candidate['indicators']['close']
-
-    def execute_trade(self):
-        pair = self.best_candidate['symbol']
-        entry_price = self.current_market_price
-        target_price = entry_price + (self.pips_target / 10000)
-        stop_loss = entry_price - (self.pips_target / 10000)
-        new_trade = Trade(pair, entry_price, stop_loss, target_price)
-        self.open_trades.append(new_trade)
-        print(f"Trade opened for {pair} at {entry_price}, with target {target_price} and stop loss {stop_loss}")
 
     def trade_open_for_pair(self, pair):
         for trade in self.open_trades:
@@ -347,70 +343,98 @@ class Trader:
                 return True
         return False
 
-    def execute_trades(self):
+    def refresh_trade_pair_price_data(self, symbol, time_frame, screener, exchange, custom_intervals):
+        pairs_instance = Pairs(symbol, screener, exchange)
+        all_data = Retrieve(pairs_instance).data
+
+        return all_data["5m"]["indicators"]["close"]
+
+    def execute_trade(self, time_frame):
         pair = self.best_candidate['symbol']
-        # Only trade if we don't have the same pair trade open and we don't exceed max open trades
-        if not self.trade_open_for_pair(pair) and len(self.open_trades) < self.max_open_trades:
-            self.execute_trade()
+        entry_price = self.current_market_price
+        confidence_scores = self.best_candidate['confidence_score']
+        print(confidence_scores)
+        buy_score = confidence_scores.get('BUY', 0)
+        sell_score = confidence_scores.get('SELL', 0)
 
+        if buy_score >= sell_score:
+            trade_direction = 'BUY'
+            target_price = entry_price + (self.pips_target / 1000)  # Target price is above entry for BUY trades
+            stop_loss = entry_price - (self.pips_target / 1000)  # Stop loss is below entry for BUY trades
+        else:
+            trade_direction = 'SELL'
+            target_price = entry_price - (self.pips_target / 1000)  # Target price is below entry for SELL trades
+            stop_loss = entry_price + (self.pips_target / 1000)  # Stop loss is above entry for SELL trades
 
-class Trade:
-    def __init__(self, pair, entry_price, stop_loss, target_price):
-        self.pair = pair
-        self.entry_price = entry_price
-        self.stop_loss = stop_loss
-        self.target_price = target_price
+        new_trade = Trade(pair, entry_price, stop_loss, target_price, time_frame, trade_direction)
+        self.open_trades.append(new_trade)
 
+        print(
+            f"\n{trade_direction} trade opened for {pair} at {entry_price}, with target {target_price} and stop loss {stop_loss}")
 
-def process_symbol(symbol):
-    trade_id = str(uuid.uuid4())[:8]
-    pairs_instance = Pairs(symbol, screener, exchange, intervals=custom_intervals)
+    def update_open_trades(self, screener, exchange, custom_intervals):
+        trades_to_remove = []  # List to hold trades that need to be closed
 
-    all_data = Retrieve(pairs_instance).data
-    analysis_component = Technical_Analysis(all_data)
-    trade_decision = analysis_component.decide_trade_action()
+        for trade in self.open_trades:
 
-    symbol_data = trade_logger.prepare_log_data(symbol, trade_id, trade_decision, all_data)
-    trades = []
-    for time_frame, decision_data in trade_decision.items():
-        trades.append({
-            'symbol': symbol,
-            'time_frame': time_frame,
-            'reasoning': decision_data['reasoning'],
-            'confidence_score': decision_data['confidence_score'],
-            'indicators': all_data[time_frame]['indicators']
-        })
-    return trades
+            current_price = self.refresh_trade_pair_price_data(trade.pair, trade.time_frame, screener, exchange,
+                                                               custom_intervals)
+
+            total_pips_move = trade.entry_price - current_price if trade.trade_direction == 'BUY' else current_price - trade.entry_price
+
+            print(
+                f"\nCurrent price for {trade.pair}: {current_price}. Target {trade.target_price}. So far {total_pips_move} Pips")
+
+            if current_price >= trade.target_price:
+                print(f"Take profit hit for {trade.pair}. Closing trade.")
+                self.open_trades.remove(trade)
+            elif current_price <= trade.stop_loss:
+                print(f"Stop loss hit for {trade.pair}. Closing trade.")
+                self.open_trades.remove(trade)
+
+        for trade in trades_to_remove:
+            self.open_trades.remove(trade)
+
+    def execute_trades(self):
+        if self.best_candidate is not None:
+            time_frame = self.best_candidate['time_frame']
+            pair = self.best_candidate['symbol']
+            if not self.trade_open_for_pair(pair) and len(self.open_trades) < self.max_open_trades:
+                self.execute_trade(time_frame)
+        else:
+            print("\nNo candidate to execute trade for.")
 
 
 if __name__ == "__main__":
-
     symbols = ["USDJPY", "GBPJPY", "EURJPY", "EURUSD", "AUDUSD", "GBPUSD", "EURRUB", "GBPJPY", "USDCAD"]
     screener = "forex"
     exchange = "FX_IDC"
-    trade_logger = Logger("/Users/stenuuesoo/Ladna/ptoq/logs")
+
     custom_intervals = {
         "15m": Interval.INTERVAL_15_MINUTES,
-        "1h": Interval.INTERVAL_1_HOUR,
     }
-    potential_trades = []
 
-    for symbol in symbols:
-        trade_id = str(uuid.uuid4())[:8]
-        pairs_instance = Pairs(symbol, screener, exchange, intervals=custom_intervals)
-
-        all_data = Retrieve(pairs_instance).data
-        analysis_component = Technical_Analysis(all_data)
-        trade_decision = analysis_component.decide_trade_action()
-
-        symbol_data = trade_logger.prepare_log_data(symbol, trade_id, trade_decision, all_data)
-        for time_frame, decision_data in trade_decision.items():
-            potential_trades.append({
-                'symbol': symbol,
-                'time_frame': time_frame,
-                'reasoning': decision_data['reasoning'],
-                'confidence_score': decision_data['confidence_score'],
-                'indicators': all_data[time_frame]['indicators']
-            })
-
+    potential_trades = collect_potential_trades(symbols, screener, exchange, custom_intervals)
     trader = Trader(potential_trades)
+
+    last_time_update_trades = 0
+    last_time_find_candidates = 0
+
+    update_interval = 60  # Refresh open trades every 60 seconds
+    find_new_interval = 900  # Find new candidates every 900 seconds (15 minutes)
+
+    while True:
+        current_time = time.time()
+
+        if current_time - last_time_update_trades >= update_interval:
+            print("Checking open trades...")
+            trader.update_open_trades(screener, exchange, custom_intervals)
+            last_time_update_trades = current_time
+
+        if current_time - last_time_find_candidates >= find_new_interval:
+            trader.find_new_candidates(screener, exchange, custom_intervals)
+            last_time_find_candidates = current_time
+
+        trader.execute_trades()
+
+        time.sleep(15)
