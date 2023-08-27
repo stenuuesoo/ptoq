@@ -8,7 +8,6 @@ class Pairs:
         self.symbol = symbol
         self.screener = screener
         self.exchange = exchange
-        # If intervals is not passed, use a default value
         if intervals is None:
             intervals = {"5m": "5m"}  # Replace "5m" with the appropriate interval constant if needed
 
@@ -26,21 +25,16 @@ class Pairs:
 
 
 class Retrieve:
-    def __init__(self, pairs_instance):
+    def __init__(self, pairs_instance, indicator_names):
         self.pairs = pairs_instance
+        self.indicator_names = indicator_names
         self.data = self.collect_data_for_all_timeframes()
 
     def collect_data_for_all_timeframes(self):
-        indicator_names = [
-            "open", "close", "Mom", "RSI", "volume", "MACD.macd", "EMA20",
-            "EMA50", "BB.upper", "BB.lower", "Pivot.M.Classic.R1",
-            "Stoch.RSI.K", "ADX", "UO", "CCI20", "P.SAR", "Recommend.All"
-        ]
-
         data = {}
         for key, handler in self.pairs.handlers.items():
             analysis = handler.get_analysis()
-            indicators = {name: analysis.indicators[name] for name in indicator_names}
+            indicators = {name: analysis.indicators[name] for name in self.indicator_names}
             data[key] = {"ma": analysis.moving_averages, "indicators": indicators}
 
         return data
@@ -245,14 +239,14 @@ class Trade:
         self.trade_direction = trade_direction
 
 
-def collect_potential_trades(symbols, screener, exchange, custom_intervals):
+def collect_potential_trades(symbols, screener, exchange, custom_intervals, indicator_names):
     potential_trades = []
 
     for symbol in symbols:
         trade_id = str(uuid.uuid4())[:8]
         pairs_instance = Pairs(symbol, screener, exchange, intervals=custom_intervals)
 
-        all_data = Retrieve(pairs_instance).data
+        all_data = Retrieve(pairs_instance, indicator_names).data
         analysis_component = Technical_Analysis(all_data)
         trade_decision = analysis_component.decide_trade_action()
 
@@ -275,7 +269,9 @@ class Trader:
         self.open_trades = []  # List to hold the currently open trades
         self.max_open_trades = 2  # Maximum allowed open trades
         self.pips_target = 20  # Pips challenge target
+        self.analysis_cache = {}  # Step 1: Initialize the cache here
         self.display_best_candidate()
+        self.execute_trades()
 
     def find_best_candidate(self):
         max_score = 0
@@ -284,7 +280,8 @@ class Trader:
         for trade in self.potential_trades:
 
             print(
-                f"\nCandidate: {trade['symbol']} ({trade['time_frame']}) with a score of {trade['confidence_score']}. Reasoning: {', '.join(trade['reasoning'])}")
+                f"\nCandidate: {trade['symbol']} ({trade['time_frame']}) with a score of {trade['confidence_score']}. "
+                f"Reasoning: {', '.join(trade['reasoning'])}")
 
             symbol = trade['symbol']
             time_frame = trade['time_frame']
@@ -310,50 +307,79 @@ class Trader:
 
         return best_candidate
 
-    def display_best_candidate(self):
-        if self.best_candidate:
-            print(
-                f"\nBest trading opportunity is for {self.best_candidate['symbol']} ({self.best_candidate['time_frame']}) with a score of {self.best_candidate['score']}. Reasoning: {', '.join(self.best_candidate['reasoning'])}")
-
-    def find_sorted_candidates(self):
-        return sorted(self.potential_trades, key=lambda x: x['confidence_score'], reverse=True)
-
-    def find_new_candidates(self, screener, exchange, custom_intervals):
+    def find_new_candidates(self, screener, exchange, custom_intervals, indicator_names):
         if len(self.open_trades) < self.max_open_trades:
             print("\n<2 trades. Finding new trade candidates...")
-            self.potential_trades = collect_potential_trades(symbols, screener, exchange, custom_intervals)
+
+            # Check cache
+            if all((symbol, time_frame) in self.analysis_cache for symbol, time_frame in
+                   [(trade['symbol'], trade['time_frame']) for trade in self.potential_trades]):
+                print("Using cached analysis.")
+                self.potential_trades = [self.analysis_cache[(symbol, time_frame)] for symbol, time_frame in
+                                         [(trade['symbol'], trade['time_frame']) for trade in self.potential_trades]]
+
+            else:
+                print("Fetching new analysis.")
+                self.potential_trades = collect_potential_trades(symbols, screener, exchange, custom_intervals,
+                                                                 indicator_names)
+
+                # Update cache
+                for trade in self.potential_trades:
+                    self.analysis_cache[(trade['symbol'], trade['time_frame'])] = trade
+
+            # Exclude trades for pairs that are already open
             temp_open_trades = self.open_trades[:]
             self.potential_trades = [trade for trade in self.potential_trades if
                                      not self.trade_open_for_pair(trade['symbol'])]
+
+            # Find best candidate
             self.best_candidate = self.find_best_candidate()
             self.open_trades = temp_open_trades[:]
 
             if self.best_candidate:
-                print(f"New best candidate found: {self.best_candidate['symbol']}")
+                print(
+                    f"New best candidate found: {self.best_candidate['symbol']}, with score "
+                    f"{self.best_candidate['confidence_score']}")
+                self.execute_trades()
+                self.update_open_trades(screener, exchange, custom_intervals, indicator_names)
             else:
                 print("No suitable candidate found.")
 
-    @property
-    def current_market_price(self):
-        return self.best_candidate['indicators']['close']
-
-    def trade_open_for_pair(self, pair):
+    def update_open_trades(self, screener, exchange, custom_intervals, indicator_names):
+        trades_to_remove = []  # List to hold trades that need to be closed
+        print("\nChecking open trades...")
         for trade in self.open_trades:
-            if trade.pair == pair:
-                return True
-        return False
+            price_indicator_names = [
+                "open", "close"
+            ]
+            current_price = self.refresh_trade_pair_price_data(trade.pair, trade.time_frame, screener, exchange,
+                                                               custom_intervals, price_indicator_names)
 
-    def refresh_trade_pair_price_data(self, symbol, time_frame, screener, exchange, custom_intervals):
-        pairs_instance = Pairs(symbol, screener, exchange)
-        all_data = Retrieve(pairs_instance).data
+            total_pips_move = trade.entry_price - current_price if trade.trade_direction == 'BUY' else (current_price
+                                                                                                        -
+                                                                                                        trade.entry_price)
 
-        return all_data["5m"]["indicators"]["close"]
+            print(
+                f"Open trade: {trade.pair}, current price: {current_price}. Target {trade.target_price}. So far "
+                f"{total_pips_move} Pips")
+
+            if current_price >= trade.target_price:
+                print(f"Take profit hit for {trade.pair}. Closing trade.")
+                self.open_trades.remove(trade)
+            elif current_price <= trade.stop_loss:
+                print(f"Stop loss hit for {trade.pair}. Closing trade.")
+                self.open_trades.remove(trade)
+
+        for trade in trades_to_remove:
+            self.open_trades.remove(trade)
+            del self.analysis_cache[(trade.pair, trade.time_frame)]
+
+        trader.find_new_candidates(screener, exchange, custom_intervals, indicator_names)
 
     def execute_trade(self, time_frame):
         pair = self.best_candidate['symbol']
         entry_price = self.current_market_price
         confidence_scores = self.best_candidate['confidence_score']
-        print(confidence_scores)
         buy_score = confidence_scores.get('BUY', 0)
         sell_score = confidence_scores.get('SELL', 0)
 
@@ -370,30 +396,33 @@ class Trader:
         self.open_trades.append(new_trade)
 
         print(
-            f"\n{trade_direction} trade opened for {pair} at {entry_price}, with target {target_price} and stop loss {stop_loss}")
+            f"\n{trade_direction} trade opened for {pair} at {entry_price}, with target {target_price} and stop loss "
+            f"{stop_loss}")
 
-    def update_open_trades(self, screener, exchange, custom_intervals):
-        trades_to_remove = []  # List to hold trades that need to be closed
+    def find_sorted_candidates(self):
+        return sorted(self.potential_trades, key=lambda x: x['confidence_score'], reverse=True)
 
-        for trade in self.open_trades:
-
-            current_price = self.refresh_trade_pair_price_data(trade.pair, trade.time_frame, screener, exchange,
-                                                               custom_intervals)
-
-            total_pips_move = trade.entry_price - current_price if trade.trade_direction == 'BUY' else current_price - trade.entry_price
-
+    def display_best_candidate(self):
+        if self.best_candidate:
             print(
-                f"\nCurrent price for {trade.pair}: {current_price}. Target {trade.target_price}. So far {total_pips_move} Pips")
+                f"\nBest trading opportunity is for {self.best_candidate['symbol']} ("
+                f"{self.best_candidate['time_frame']}) with a score of {self.best_candidate['score']}. Reasoning: "
+                f"{', '.join(self.best_candidate['reasoning'])}")
 
-            if current_price >= trade.target_price:
-                print(f"Take profit hit for {trade.pair}. Closing trade.")
-                self.open_trades.remove(trade)
-            elif current_price <= trade.stop_loss:
-                print(f"Stop loss hit for {trade.pair}. Closing trade.")
-                self.open_trades.remove(trade)
+    @property
+    def current_market_price(self):
+        return self.best_candidate['indicators']['close']
 
-        for trade in trades_to_remove:
-            self.open_trades.remove(trade)
+    def trade_open_for_pair(self, pair):
+        for trade in self.open_trades:
+            if trade.pair == pair:
+                return True
+        return False
+
+    def refresh_trade_pair_price_data(self, symbol, time_frame, screener, exchange, custom_intervals, indicator_names):
+        pairs_instance = Pairs(symbol, screener, exchange)
+        all_data = Retrieve(pairs_instance, indicator_names).data  # Added indicator_names here
+        return all_data["5m"]["indicators"]["close"]
 
     def execute_trades(self):
         if self.best_candidate is not None:
@@ -406,7 +435,7 @@ class Trader:
 
 
 if __name__ == "__main__":
-    symbols = ["USDJPY", "GBPJPY", "EURJPY", "EURUSD", "AUDUSD", "GBPUSD", "EURRUB", "GBPJPY", "USDCAD"]
+    symbols = ["USDJPY", "GBPJPY", "EURJPY"]
     screener = "forex"
     exchange = "FX_IDC"
 
@@ -414,27 +443,18 @@ if __name__ == "__main__":
         "15m": Interval.INTERVAL_15_MINUTES,
     }
 
-    potential_trades = collect_potential_trades(symbols, screener, exchange, custom_intervals)
+    indicator_names = [
+        "open", "close", "Mom", "RSI", "volume", "MACD.macd", "EMA20",
+        "EMA50", "BB.upper", "BB.lower", "Pivot.M.Classic.R1",
+        "Stoch.RSI.K", "ADX", "UO", "CCI20", "P.SAR", "Recommend.All"
+    ]
+
+    potential_trades = collect_potential_trades(symbols, screener, exchange, custom_intervals, indicator_names)
     trader = Trader(potential_trades)
-
-    last_time_update_trades = 0
-    last_time_find_candidates = 0
-
-    update_interval = 60  # Refresh open trades every 60 seconds
-    find_new_interval = 900  # Find new candidates every 900 seconds (15 minutes)
+    trader.analysis_cache = {(trade['symbol'], trade['time_frame']): trade for trade in potential_trades}
 
     while True:
-        current_time = time.time()
-
-        if current_time - last_time_update_trades >= update_interval:
-            print("Checking open trades...")
-            trader.update_open_trades(screener, exchange, custom_intervals)
-            last_time_update_trades = current_time
-
-        if current_time - last_time_find_candidates >= find_new_interval:
-            trader.find_new_candidates(screener, exchange, custom_intervals)
-            last_time_find_candidates = current_time
-
         trader.execute_trades()
+        trader.update_open_trades(screener, exchange, custom_intervals, indicator_names)
 
-        time.sleep(15)
+        time.sleep(60)
