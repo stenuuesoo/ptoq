@@ -93,7 +93,6 @@ class Technical_Analysis:
 
     def ma_rec(self, time_frame, ma_value, direction_scores, reasoning):
         if ma_value is None:
-            # reasoning.append("Moving Average value is missing (None)")
             return
         reason = self.get_ma_message(time_frame, ma_value)
         if 'BUY' in reason:
@@ -104,25 +103,18 @@ class Technical_Analysis:
 
     def ma_logic(self, ema_20_value, ema_50_value, direction_scores, reasoning):
         if ema_20_value is None or ema_50_value is None:
-            # reasoning.append("EMA value is missing (None)")
             return
-        # Bullish Signal
         if ema_20_value > ema_50_value:
             direction_scores['BUY'] += 1
             reasoning.append("EMA20 is above EMA50, potential BUY")
-
-        # Bearish Signal
         elif ema_20_value < ema_50_value:
             direction_scores['SELL'] += 1
             reasoning.append("EMA50 is above EMA20, potential SELL")
-
-        # Neither bullish nor bearish
         else:
             reasoning.append("EMA20 and EMA50 are equal, no clear direction")
 
     def rsi_logic(self, rsi_value, direction_scores, reasoning):
         if rsi_value is None:
-            # reasoning.append("RSI value is missing (None)")
             return
         if rsi_value < self.RSI_MIN:
             reasoning.append(f"RSI is below {self.RSI_MIN} - potential BUY")
@@ -133,7 +125,6 @@ class Technical_Analysis:
 
     def macd_logic(self, macd_value, direction_scores, reasoning):
         if macd_value is None:
-            # reasoning.append("MACD value is missing (None)")
             return
         if macd_value > self.MACD_SIGNAL_DIFF_BUY:
             reasoning.append("MACD is above the signal line - potential BUY")
@@ -144,7 +135,6 @@ class Technical_Analysis:
 
     def bollinger_logic(self, bb_upper_value, bb_lower_value, close_value, direction_scores, reasoning):
         if None in [bb_upper_value, bb_lower_value, close_value]:
-            # reasoning.append("Bollinger Band or Price value is missing (None)")
             return
         if close_value > bb_upper_value:
             reasoning.append("Price is above Bollinger Band upper limit - potential SELL")
@@ -155,7 +145,6 @@ class Technical_Analysis:
 
     def oscillator_logic(self, osc_value, direction_scores, reasoning):
         if osc_value is None:
-            # reasoning.append("Stochastic Oscillator value is missing (None)")
             return
         if osc_value < self.STOCHASTIC_OSCILLATOR_MIN:
             reasoning.append("Stochastic Oscillator is in oversold region - potential BUY")
@@ -292,6 +281,12 @@ class Trader:
     def __init__(self, potential_trades):
         self.potential_trades = potential_trades
         self.best_candidate = self.find_best_candidate()
+        self.open_trades = []  # List to hold the currently open trades
+        self.max_open_trades = 2  # Maximum allowed open trades
+        self.pips_target = 20  # Pips challenge target
+
+        self.display_best_candidate()
+        self.execute_trade()
 
     def find_best_candidate(self):
         # This function finds the best trading candidate based on confidence scores
@@ -299,11 +294,19 @@ class Trader:
         best_candidate = None
 
         for trade in self.potential_trades:
+
+            print(
+                f"\nCandidate: {trade['symbol']} ({trade['time_frame']}) with a score of {trade['confidence_score']}. Reasoning: {', '.join(trade['reasoning'])}")
+
             symbol = trade['symbol']
             time_frame = trade['time_frame']
+
+            # Modifying the access structure to match the appended data
             buy_score = trade['confidence_score']['BUY']
             sell_score = trade['confidence_score']['SELL']
 
+            # A simplistic way to determine score
+            # Modify this based on your trading strategy and risk appetite
             score = buy_score - sell_score
 
             if score > max_score:
@@ -312,7 +315,8 @@ class Trader:
                     'symbol': symbol,
                     'time_frame': time_frame,
                     'score': score,
-                    'reasoning': trade['reasoning']
+                    'reasoning': trade['reasoning'],
+                    'indicators': trade['indicators']
                 }
 
         return best_candidate
@@ -320,8 +324,63 @@ class Trader:
     def display_best_candidate(self):
         if self.best_candidate:
             print(
-                f"Best trading opportunity is for {self.best_candidate['symbol']} ({self.best_candidate['time_frame']}) "
-                f"with a score of {self.best_candidate['score']}. Reasoning: {', '.join(self.best_candidate['reasoning'])}")
+                f"\nBest trading opportunity is for {self.best_candidate['symbol']} ({self.best_candidate['time_frame']}) with a score of {self.best_candidate['score']}. Reasoning: {', '.join(self.best_candidate['reasoning'])}")
+
+    @property
+    def current_market_price(self):
+        # For simplicity, we'll take the close price from the 15m timeframe as the current market price.
+
+        return self.best_candidate['indicators']['close']
+
+    def execute_trade(self):
+        pair = self.best_candidate['symbol']
+        entry_price = self.current_market_price
+        target_price = entry_price + (self.pips_target / 10000)
+        stop_loss = entry_price - (self.pips_target / 10000)
+        new_trade = Trade(pair, entry_price, stop_loss, target_price)
+        self.open_trades.append(new_trade)
+        print(f"Trade opened for {pair} at {entry_price}, with target {target_price} and stop loss {stop_loss}")
+
+    def trade_open_for_pair(self, pair):
+        for trade in self.open_trades:
+            if trade.pair == pair:
+                return True
+        return False
+
+    def execute_trades(self):
+        pair = self.best_candidate['symbol']
+        # Only trade if we don't have the same pair trade open and we don't exceed max open trades
+        if not self.trade_open_for_pair(pair) and len(self.open_trades) < self.max_open_trades:
+            self.execute_trade()
+
+
+class Trade:
+    def __init__(self, pair, entry_price, stop_loss, target_price):
+        self.pair = pair
+        self.entry_price = entry_price
+        self.stop_loss = stop_loss
+        self.target_price = target_price
+
+
+def process_symbol(symbol):
+    trade_id = str(uuid.uuid4())[:8]
+    pairs_instance = Pairs(symbol, screener, exchange, intervals=custom_intervals)
+
+    all_data = Retrieve(pairs_instance).data
+    analysis_component = Technical_Analysis(all_data)
+    trade_decision = analysis_component.decide_trade_action()
+
+    symbol_data = trade_logger.prepare_log_data(symbol, trade_id, trade_decision, all_data)
+    trades = []
+    for time_frame, decision_data in trade_decision.items():
+        trades.append({
+            'symbol': symbol,
+            'time_frame': time_frame,
+            'reasoning': decision_data['reasoning'],
+            'confidence_score': decision_data['confidence_score'],
+            'indicators': all_data[time_frame]['indicators']
+        })
+    return trades
 
 
 if __name__ == "__main__":
@@ -331,12 +390,8 @@ if __name__ == "__main__":
     exchange = "FX_IDC"
     trade_logger = Logger("/Users/stenuuesoo/Ladna/ptoq/logs")
     custom_intervals = {
-        "5m": Interval.INTERVAL_5_MINUTES,
         "15m": Interval.INTERVAL_15_MINUTES,
-        "30m": Interval.INTERVAL_30_MINUTES,
         "1h": Interval.INTERVAL_1_HOUR,
-        "2h": Interval.INTERVAL_2_HOURS,
-        "4h": Interval.INTERVAL_4_HOURS,
     }
     potential_trades = []
 
@@ -349,14 +404,13 @@ if __name__ == "__main__":
         trade_decision = analysis_component.decide_trade_action()
 
         symbol_data = trade_logger.prepare_log_data(symbol, trade_id, trade_decision, all_data)
-
         for time_frame, decision_data in trade_decision.items():
             potential_trades.append({
                 'symbol': symbol,
                 'time_frame': time_frame,
                 'reasoning': decision_data['reasoning'],
-                'confidence_score': decision_data['confidence_score']
+                'confidence_score': decision_data['confidence_score'],
+                'indicators': all_data[time_frame]['indicators']
             })
 
     trader = Trader(potential_trades)
-    trader.display_best_candidate()
