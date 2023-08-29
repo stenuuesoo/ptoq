@@ -249,14 +249,18 @@ class Technical_Analysis:
 
 
 class Trade:
-    def __init__(self, pair, entry_price, stop_loss, target_price, time_frame, trade_direction):
+    def __init__(self, pair, entry_price, stop_loss, target_price, time_frame, trade_direction,
+                 lot_size, trade_amount_in_dollars, potential_profit_or_loss, pip_value):
         self.pair = pair
         self.entry_price = entry_price
         self.stop_loss = stop_loss
         self.target_price = target_price
         self.time_frame = time_frame
         self.trade_direction = trade_direction
-
+        self.lot_size = lot_size  # Added to store lot_size
+        self.trade_amount_in_dollars = trade_amount_in_dollars  # Added to store trade_amount_in_dollars
+        self.potential_profit_or_loss = potential_profit_or_loss  # Added to store potential_profit_or_loss
+        self.pip_value = pip_value  # Save pip_value
 
 def collect_potential_trades(symbols, screener, exchange, custom_intervals, indicator_names):
     potential_trades = []
@@ -282,14 +286,98 @@ def collect_potential_trades(symbols, screener, exchange, custom_intervals, indi
 
 
 class Trader:
-    def __init__(self, potential_trades):
+    def __init__(self, potential_trades, trade_size=100000, account_balance=10000):
         self.potential_trades = potential_trades
         self.best_candidate = self.find_best_candidate()
         self.open_trades = []  # List to hold the currently open trades
-        self.max_open_trades = 2  # Maximum allowed open trades
-        self.pips_target = 20  # Pips challenge target
+        self.max_open_trades = 3  # Maximum allowed open trades
+        self.trade_target = 30  # Pips challenge target
         self.analysis_cache = {}  # Step 1: Initialize the cache here
+        self.trade_size = trade_size  # New attribute to store trade size
+        self.account_balance = account_balance  # Added account_balance
         self.display_best_candidate()
+
+    def set_trade_parameters(self, time_frame):
+        risk_percentage = 0.02  # 2%
+        max_risk_dollars = self.account_balance * risk_percentage  # E.g., $200 if balance is $10,000
+        pair = self.best_candidate['symbol']
+        entry_price = self.current_market_price
+        confidence_scores = self.best_candidate['confidence_score']
+        buy_score = confidence_scores.get('BUY', 0)
+        sell_score = confidence_scores.get('SELL', 0)
+        pip_value = 0.01 if 'JPY' in pair else 0.0001
+        stop_loss_pips = 20
+        target_pips = self.trade_target
+        lot_size = max_risk_dollars / (stop_loss_pips * pip_value)
+
+        if buy_score >= sell_score:
+            trade_direction = 'BUY'
+            stop_loss = entry_price - (stop_loss_pips * pip_value)
+            target_price = entry_price + (target_pips * pip_value)
+        else:
+            trade_direction = 'SELL'
+            stop_loss = entry_price + (stop_loss_pips * pip_value)
+            target_price = entry_price - (target_pips * pip_value)
+
+        trade_amount_in_dollars = max_risk_dollars
+        return pair, entry_price, trade_direction, stop_loss, target_price, lot_size, trade_amount_in_dollars, max_risk_dollars, pip_value, stop_loss_pips, target_pips
+
+    def execute_trade(self, time_frame):
+        pair, entry_price, trade_direction, stop_loss, target_price, lot_size, trade_amount_in_dollars, max_risk_dollars, pip_value, stop_loss_pips, target_pips = self.set_trade_parameters(
+            time_frame)
+        new_trade = Trade(pair, entry_price, stop_loss, target_price, time_frame, trade_direction,
+                          lot_size, trade_amount_in_dollars, max_risk_dollars, pip_value)
+        self.open_trades.append(new_trade)
+
+        message = (
+            f"\n{trade_direction} trade opened for {pair} at {entry_price:.4f}"
+            f"\nLot size of {lot_size:.2f} units."
+            f"\nTrade Amount: ${trade_amount_in_dollars:.2f}"
+            f"\nTarget: {target_price:.4f} ({target_pips} pips), Stop Loss: {stop_loss:.4f} ({stop_loss_pips} pips)"
+            f"\nPotential Profit or Loss: ${max_risk_dollars:.2f}"
+        )
+        print(message)
+        telegram_messager.send_telegram_message(message)
+
+    def update_open_trades(self, screener, exchange, custom_intervals, indicator_names):
+        trades_to_remove = []
+
+        for trade in self.open_trades:
+            current_price = self.refresh_trade_pair_price_data(trade.pair, trade.time_frame, screener, exchange,
+                                                               custom_intervals, ["open", "close"])
+
+            if trade.trade_direction == 'BUY':
+                total_pips_move = (current_price - trade.entry_price) / trade.pip_value
+            else:
+                total_pips_move = (trade.entry_price - current_price) / trade.pip_value
+
+            # Retrieve the previously stored data instead of calculating it again
+            monetary_gain_loss = total_pips_move * trade.lot_size * trade.pip_value
+
+            message = (
+                f"\nOpen trade: {trade.pair} at {trade.entry_price:.4f}"
+                f"\nLot size of {trade.lot_size:.2f} units."
+                f"\nTrade Amount: ${trade.trade_amount_in_dollars:.2f}"
+                f"\nTarget: {trade.target_price:.4f}, Stop Loss: {trade.stop_loss:.4f}"
+                f"\nPotential Profit or Loss: ${trade.potential_profit_or_loss:.2f}"
+                f"\nCurrent price: {current_price:.4f}. So far: {total_pips_move:.1f} Pips ({monetary_gain_loss:.2f} USD)."
+            )
+
+            print(message)
+            telegram_messager.send_telegram_message(message)
+
+            if current_price >= trade.target_price or current_price <= trade.stop_loss:
+                action = "Take profit hit" if current_price >= trade.target_price else "Stop loss hit"
+                message = f"{action} for {trade.pair}. Closing trade."
+                print(message)
+                telegram_messager.send_telegram_message(message)
+                trades_to_remove.append(trade)
+
+        for trade in trades_to_remove:
+            self.open_trades.remove(trade)
+            del self.analysis_cache[(trade.pair, trade.time_frame)]
+
+        self.find_new_candidates(screener, exchange, custom_intervals, indicator_names)
 
     def find_best_candidate(self):
         max_score = 0
@@ -297,9 +385,9 @@ class Trader:
 
         for trade in self.potential_trades:
 
-            print(
-                f"\nCandidate: {trade['symbol']} ({trade['time_frame']}) with a score of {trade['confidence_score']}. "
-                f"Reasoning: {', '.join(trade['reasoning'])}")
+            #print(
+            #    f"\nCandidate: {trade['symbol']} ({trade['time_frame']}) with a score of {trade['confidence_score']}. "
+            #    f"Reasoning: {', '.join(trade['reasoning'])}")
 
             symbol = trade['symbol']
             time_frame = trade['time_frame']
@@ -327,12 +415,12 @@ class Trader:
 
     def find_new_candidates(self, screener, exchange, custom_intervals, indicator_names):
         if len(self.open_trades) < self.max_open_trades:
-            print("\n<2 trades. Finding new trade candidates...")
+            #print("\n<2 trades. Finding new trade candidates...")
 
             # Check cache
             if all((symbol, time_frame) in self.analysis_cache for symbol, time_frame in
                    [(trade['symbol'], trade['time_frame']) for trade in self.potential_trades]):
-                print("Using cached analysis.")
+                #print("Using cached analysis.")
                 self.potential_trades = [self.analysis_cache[(symbol, time_frame)] for symbol, time_frame in
                                          [(trade['symbol'], trade['time_frame']) for trade in self.potential_trades]]
 
@@ -355,59 +443,25 @@ class Trader:
             self.open_trades = temp_open_trades[:]
 
             if self.best_candidate:
-                message = f"New best candidate found: {self.best_candidate['symbol']}, with score {self.best_candidate['confidence_score']}"
-                telegram_messager.send_telegram_message(message)
-                print(message)
+                #message = f"\nNew best candidate found:" # {self.best_candidate['symbol']}, with score {self.best_candidate['confidence_score']}"
+                self.display_best_candidate()
+                #telegram_messager.send_telegram_message(message)
+                #print(message)
                 self.execute_trades()
-                self.update_open_trades(screener, exchange, custom_intervals, indicator_names)
-            else:
-                print("No suitable candidate found.")
+                #self.update_open_trades(screener, exchange, custom_intervals, indicator_names)
 
-    def update_open_trades(self, screener, exchange, custom_intervals, indicator_names):
-        trades_to_remove = []  # List to hold trades that need to be closed
-        print("\nChecking open trades...")
-        telegram_messager.send_telegram_message("Checking open trades...")
 
-        for trade in self.open_trades:
-            price_indicator_names = [
-                "open", "close"
-            ]
-            current_price = self.refresh_trade_pair_price_data(trade.pair, trade.time_frame, screener, exchange,
-                                                               custom_intervals, price_indicator_names)
-
-            total_pips_move = trade.entry_price - current_price if trade.trade_direction == 'BUY' else (current_price
-                                                                                                        -
-                                                                                                        trade.entry_price)
-            message = (
-                f"Open trade: {trade.pair}, entry price: {trade.entry_price:.3f}, current price: {current_price:.3f}. "
-                f"Target {trade.target_price:.3f}. So far {total_pips_move} Pips"
-            )
-            print(message)
-            telegram_messager.send_telegram_message(message)
-
-            if current_price >= trade.target_price:
-                message = f"Take profit hit for {trade.pair}. Closing trade."
-                print(message)
-                telegram_messager.send_telegram_message(message)
-                self.open_trades.remove(trade)
-            elif current_price <= trade.stop_loss:
-                message = f"Stop loss hit for {trade.pair}. Closing trade."
-                print(message)
-                telegram_messager.send_telegram_message(message)
-                self.open_trades.remove(trade)
-
-        for trade in trades_to_remove:
-            self.open_trades.remove(trade)
-            del self.analysis_cache[(trade.pair, trade.time_frame)]
-
-        trader.find_new_candidates(screener, exchange, custom_intervals, indicator_names)
 
     def find_sorted_candidates(self):
         return sorted(self.potential_trades, key=lambda x: x['confidence_score'], reverse=True)
 
     def display_best_candidate(self):
         if self.best_candidate:
-            message = f"\nBest trading opportunity is for {self.best_candidate['symbol']} ({self.best_candidate['time_frame']}) with a score of {self.best_candidate['score']}. Reasoning: {', '.join(self.best_candidate['reasoning'])}"
+            message = (
+                f"\nBest trading opportunity is for {self.best_candidate['symbol']} ({self.best_candidate['time_frame']}) with a score of {self.best_candidate['score']}."
+            )
+            for indicator in self.best_candidate['reasoning']:
+                message += f"\n- {indicator}"
             print(message)
             telegram_messager.send_telegram_message(message)
 
@@ -441,43 +495,11 @@ class Trader:
             pair = self.best_candidate['symbol']
             if not self.trade_open_for_pair(pair) and len(self.open_trades) < self.max_open_trades:
                 self.execute_trade(time_frame)
-        else:
-            print("\nNo candidate to execute trade for.")
-
-    def execute_trade(self, time_frame):
-        #print(self.best_candidate)
-        pair = self.best_candidate['symbol']
-        entry_price = self.current_market_price
-        confidence_scores = self.best_candidate['confidence_score']
-        buy_score = confidence_scores.get('BUY', 0)
-        sell_score = confidence_scores.get('SELL', 0)
-
-        if 'JPY' in pair:
-            pip_value = 0.01
-        else:
-            pip_value = 0.0001
-
-        if buy_score >= sell_score:
-            trade_direction = 'BUY'
-            target_price = entry_price + (self.pips_target * pip_value)
-            stop_loss = entry_price - (self.pips_target * pip_value)
-        else:
-            trade_direction = 'SELL'
-            target_price = entry_price - (self.pips_target * pip_value)
-            stop_loss = entry_price + (self.pips_target * pip_value)
-
-        new_trade = Trade(pair, entry_price, stop_loss, target_price, time_frame, trade_direction)
-        self.open_trades.append(new_trade)
-
-        print(
-            f"\n{trade_direction} trade opened for {pair} at {entry_price:.3f}, with target {target_price:.3f} and stop loss "
-            f"{stop_loss:.3f}")
-
 
 
 
 if __name__ == "__main__":
-    symbols = ["USDJPY", "GBPJPY"]  # , "EURJPY", "GBPUSD", "EURUSD", "GBPEUR", "AUDUSD",]
+    symbols = ["USDJPY", "GBPJPY" , "EURJPY", "GBPUSD", "EURUSD", "GBPEUR", "AUDUSD",]
     screener = "forex"
     exchange = "FX_IDC"
 
@@ -492,7 +514,7 @@ if __name__ == "__main__":
     ]
 
     token = "6112505967:AAFvQzBpIiryzZfA4i9nzvVW63W6DFIqRpY"
-    chat_id = "-1001910608077"
+    chat_id = "-1001910608077" #removed the - from the chat_id to disable sending messages
     telegram_messager = Telegram_ptoq_bot(token, chat_id)
 
     potential_trades = collect_potential_trades(symbols, screener, exchange, custom_intervals, indicator_names)
@@ -502,8 +524,8 @@ if __name__ == "__main__":
     try:
         while True:
             trader.execute_trades()
+            time.sleep(30)
             trader.update_open_trades(screener, exchange, custom_intervals, indicator_names)
 
-            time.sleep(3)
     except Exception as e:
             telegram_messager.send_telegram_message(f"An error occurred sendig message: {e}")
