@@ -318,31 +318,32 @@ class Trader:
         trades_to_remove = []
 
         for trade in self.open_trades:
-            current_price = self.refresh_trade_pair_price_data(trade.pair, trade.time_frame, screener, exchange,
-                                                               custom_intervals, ["open", "close"])
+            current_price = round(
+                self.refresh_trade_pair_price_data(trade.pair, trade.time_frame, screener, exchange, custom_intervals,
+                                                   ["open", "close"]), 4)
 
-            if trade.trade_direction == 'BUY':
-                total_pips_move = (current_price - trade.entry_price) / trade.pip_value
-            else:
-                total_pips_move = (trade.entry_price - current_price) / trade.pip_value
-            monetary_gain_loss = total_pips_move * trade.lot_size * trade.pip_value
+            trade.target_price = round(trade.target_price, 4)
+            trade.stop_loss = round(trade.stop_loss, 4)
+            # Debugging line to print and check the values.
+            #print(f"current_price: {current_price}, target_price: {trade.target_price}, stop_loss: {trade.stop_loss}")
+
             change_in_price = current_price-trade.entry_price
 
-            message = (
-                f"\nOpen {trade.pair}: {trade.trade_direction} trade. Current: {current_price:.4f}"
-                f"\nEntry: {trade.entry_price:.4f},  Change: {change_in_price:.4f}"
-                f"\nTarget: {trade.target_price:.4f},  , Stop Loss: {trade.stop_loss:.4f}"
-                f"\nMovement: {total_pips_move:.1f} Pips ({monetary_gain_loss:.2f} USD)."
-            )
+            should_close_trade = (trade.trade_direction == 'BUY' and (
+                    current_price >= trade.target_price or current_price <= trade.stop_loss)) or \
+                                 (trade.trade_direction == 'SELL' and (
+                                         current_price <= trade.target_price or current_price >= trade.stop_loss))
 
-            print(message)
-            #telegram_messager.send_telegram_message(message)
-
-            if current_price >= trade.target_price or current_price <= trade.stop_loss:
-                action = "Take profit hit" if current_price >= trade.target_price else "Stop loss hit"
-                message = f"{action} for {trade.pair}. Closing trade."
-                print(message)
-                telegram_messager.send_telegram_message(message)
+            if should_close_trade:
+                action_type = "Take profit hit" if current_price >= trade.target_price else "Stop loss hit"
+                relevant_price = trade.target_price if current_price >= trade.target_price else trade.stop_loss
+                action = (
+                    f"{action_type} for {trade.pair}."
+                    f"\nEntry: {trade.entry_price:.4f}, Change: {change_in_price:.4f}"
+                    f"\nRelevant Price: {relevant_price:.4f}. Trade closed."
+                )
+                print(action)
+                telegram_messager.send_telegram_message(action)
                 trades_to_remove.append(trade)
 
         for trade in trades_to_remove:
@@ -455,7 +456,7 @@ class Trader:
 
     def set_trade_parameters(self, time_frame):
         risk_percentage = 0.02  # 2%
-        max_risk_dollars = self.account_balance * risk_percentage  # E.g., $200 if balance is $10,000
+        max_risk_dollars = self.account_balance * risk_percentage
         pair = self.best_candidate['symbol']
         entry_price = self.current_market_price
         confidence_scores = self.best_candidate['confidence_score']
@@ -464,7 +465,10 @@ class Trader:
         pip_value = 0.01 if 'JPY' in pair else 0.0001
         stop_loss_pips = 20
         target_pips = self.trade_target
-        lot_size = max_risk_dollars / (stop_loss_pips * pip_value)
+
+        # Correcting the lot_size calculation
+        risk_per_pip = max_risk_dollars / stop_loss_pips
+        lot_size = risk_per_pip / 10  # Adjusting for the typical $10/pip value for a standard lot in EUR/USD
 
         if buy_score >= sell_score:
             trade_direction = 'BUY'
@@ -479,9 +483,8 @@ class Trader:
         return pair, entry_price, trade_direction, stop_loss, target_price, lot_size, trade_amount_in_dollars, max_risk_dollars, pip_value, stop_loss_pips, target_pips
 
 
-
 if __name__ == "__main__":
-    symbols = ["USDJPY", "GBPJPY" , "EURJPY", "GBPUSD", "EURUSD", "GBPEUR", "AUDUSD",]
+    symbols = ["EURUSD"]#["USDJPY", "GBPJPY" , "EURJPY", "GBPUSD", "EURUSD", "GBPEUR", "AUDUSD",]
     screener = "forex"
     exchange = "FX_IDC"
 
@@ -499,7 +502,7 @@ if __name__ == "__main__":
     chat_id = "-1001910608077" #removed the - from the chat_id to disable sending messages
     telegram_messager = Telegram_ptoq_bot(token, chat_id)
 
-    min_score = 5
+    min_score = 2
 
     trader = Trader(min_score, symbols, screener, exchange, custom_intervals, indicator_names)
     trader.analysis_cache = {(trade['symbol'], trade['time_frame']): trade for trade in trader.potential_trades}
