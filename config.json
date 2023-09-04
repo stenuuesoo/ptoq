@@ -1,0 +1,25 @@
+{
+  "custom_intervals": {
+    "2H": "INTERVAL_2_HOURS"
+  },
+  "indicator_names": [
+    "open", "close", "Mom", "RSI", "volume", "MACD.macd", "EMA20",
+    "EMA50", "BB.upper", "BB.lower", "Pivot.M.Classic.R1",
+    "Stoch.RSI.K", "ADX", "UO", "CCI20", "P.SAR", "Recommend.All"
+  ],
+  "min_score": 2,
+  "token": "6112505967:AAFvQzBpIiryzZfA4i9nzvVW63W6DFIqRpY",
+  "chat_id": "-1001910608077",
+  "currencies": {
+    "forex": {
+      "symbols": ["EURUSD"],
+      "screener": "forex",
+      "exchange": "FX_IDC"
+    },
+    "crypto": {
+      "symbols": ["ETHBUSD", "XLMBUSD", "UNIBUSD"],
+      "screener": "crypto",
+      "exchange": "BINANCE"
+    }
+  }
+}
